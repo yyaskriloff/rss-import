@@ -143,12 +143,15 @@ const proccessEpisode = imageUrl => (item, index) =>
 
     const bufferArray = await fetch(audioUrl).then(res => res.arrayBuffer())
 
-    const splits = audioUrl.split('.')
+    // remove query params from audioUrl
+    const cleanAudioUrl = audioUrl.split('?')[0]
+
+    const splits = cleanAudioUrl.split('.')
     const fileType = splits[splits.length - 1]
 
     const pathDate = Date.now()
     const inputPath = path.join('/tmp', pathDate + '.' + fileType)
-    const outputPath = path.join('/tmp', pathDate + '.mp3')
+    const outputPath = path.join('/tmp', pathDate + 'output' + '.mp3')
 
     fs.writeFileSync(inputPath, new Uint8Array(bufferArray), 'binary')
 
@@ -201,7 +204,11 @@ const proccessEpisode = imageUrl => (item, index) =>
   })
 
 const main = async () => {
-  const rssFeed = await rss.parse(url)
+  const rssFeed = await rss.parse(url, {
+    validateStatus: function (status) {
+      return true
+    }
+  })
 
   const show = await db
     .execute(sql`SELECT * FROM shows WHERE id = ${showId}`)
@@ -215,13 +222,25 @@ const main = async () => {
 
   const episodeMapFunction = proccessEpisode(rssFeed.image)
 
-  const exacutables = rssFeed.items.reverse().map(episodeMapFunction)
+  console.log('Total episodes to process: ', rssFeed.items.length)
+
+  const exacutables = rssFeed.items.reverse().map((item, index) =>
+    episodeMapFunction(item, index)
+      .then(res => {
+        console.log('Processed episode ', item.title)
+        return res
+      })
+      .catch(() => {
+        console.log('Could not process episode ', item.title)
+        return null
+      })
+  )
 
   const episodesToAdd = await Promise.all(exacutables)
 
   const newEpisodes = await db
     .insert(episodes)
-    .values(episodesToAdd)
+    .values(episodesToAdd.filter(Boolean))
     .returning()
 
   await Promise.all(
